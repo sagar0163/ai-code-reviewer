@@ -215,13 +215,14 @@ def main():
     parser.add_argument('--github', '-g', nargs=3, metavar=('OWNER', 'REPO', 'PR'),
                        help='Create GitHub review')
     parser.add_argument('--extensions', '-e', help='File extensions to check (comma separated)')
+    parser.add_argument('--model', '-m', default='gpt-4o-mini', help='LLM model to use (e.g. gpt-4o, ollama/llama3)')
     
     args = parser.parse_args()
     
     print("🔍 AI Code Reviewer")
     print("=" * 50)
     
-    analyzer = CodeAnalyzer()
+    analyzer = CodeReviewer(model=args.model)
     results = []
     
     path = Path(args.path)
