@@ -290,9 +290,13 @@ class GitHubIntegration:
         }
         
         try:
-            response = requests.post(url, json=data, headers=headers)
+            response = requests.post(url, json=data, headers=headers, timeout=10)
             return response.status_code == 200
-        except:
+        except requests.exceptions.Timeout:
+            print("⚠️ GitHub API request timed out after 10 seconds")
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️ GitHub API request failed: {e}")
             return False
 
 
