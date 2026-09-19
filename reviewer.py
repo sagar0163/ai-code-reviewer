@@ -22,6 +22,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
+import litellm
 
 
 LANGUAGE_EXTENSIONS = {
@@ -45,117 +46,97 @@ class ReviewResult:
     suggestions: List[str]
 
 
-class CodeAnalyzer:
-    """Static code analysis without AI"""
+class CodeReviewer:
+    """AI-powered code analysis using litellm"""
     
-    RULES = {
-        'python': [
-            {'pattern': r'eval\s*\(', 'severity': 'high', 'message': 'Avoid eval() - security risk'},
-            {'pattern': r'os\.system\s*\(', 'severity': 'high', 'message': 'Avoid os.system() - shell injection risk'},
-            {'pattern': r'pickle\.loads?', 'severity': 'medium', 'message': 'Pickle can be unsafe with untrusted data'},
-            {'pattern': r'password\s*=\s*["\'][^"\']+["\']', 'severity': 'medium', 'message': 'Hardcoded password detected'},
-            {'pattern': r'TODO|FIXME|XXX|HACK', 'severity': 'low', 'message': 'Incomplete code marker found'},
-            {'pattern': r'except:\s*$', 'severity': 'medium', 'message': 'Bare except clause - catches all exceptions'},
-            {'pattern': r'print\s*\(', 'severity': 'low', 'message': 'Debug print statement found'},
-        ],
-        'javascript': [
-            {'pattern': r'eval\s*\(', 'severity': 'high', 'message': 'Avoid eval() - security risk'},
-            {'pattern': r'console\.log', 'severity': 'low', 'message': 'Debug console.log found'},
-            {'pattern': r'document\.write', 'severity': 'high', 'message': 'document.write is dangerous'},
-            {'pattern': r'innerHTML\s*=', 'severity': 'medium', 'message': 'Potential XSS via innerHTML'},
-            {'pattern': r'password|pwd|secret', 'severity': 'high', 'message': 'Potential credential in code'},
-            {'pattern': r'var\s+\w+', 'severity': 'low', 'message': 'Use let/const instead of var'},
-        ],
-        'typescript': [
-            {'pattern': r'@ts-ignore', 'severity': 'low', 'message': 'Type checking disabled'},
-            {'pattern': r'any\s*\)', 'severity': 'low', 'message': 'Avoid using any type'},
-            {'pattern': r'console\.log', 'severity': 'low', 'message': 'Debug console.log found'},
-        ],
-        'go': [
-            {'pattern': r'fmt\.Println', 'severity': 'low', 'message': 'Debug print found'},
-            {'pattern': r'panic\s*\(', 'severity': 'medium', 'message': 'Panic usage detected'},
-            {'pattern': r'//TODO', 'severity': 'low', 'message': 'TODO comment found'},
-        ],
-        'rust': [
-            {'pattern': r'unsafe\s*{', 'severity': 'medium', 'message': 'Unsafe code block'},
-            {'pattern': r'\.unwrap\(\)', 'severity': 'low', 'message': 'Using unwrap() - may panic'},
-            {'pattern': r'eprintln!', 'severity': 'low', 'message': 'Error print to stderr'},
-        ],
-    }
-    
-    def __init__(self):
-        self.issues = []
-    
+    def __init__(self, model: str = 'gpt-4o-mini'):
+        self.model = model
+        
+    def review(self, code: str, language: str) -> List[Dict]:
+        """Review code snippet (for tests)"""
+        prompt = f"""
+You are an expert code reviewer. Review the following {language} code for security vulnerabilities, bugs, and quality issues.
+Return the result as a JSON object with a single key "issues", which is a list of objects.
+Each issue object must have:
+- "line": integer line number (or 0 if general)
+- "severity": "high", "medium", or "low"
+- "message": string describing the issue
+- "code": string containing the relevant code snippet
+
+Code to review:
+```
+{code}
+```
+"""
+        try:
+            response = litellm.completion(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            content = response.choices[0].message.content
+            parsed = json.loads(content)
+            return parsed.get("issues", [])
+        except Exception as e:
+            return [{"line": 0, "severity": "error", "message": f"LLM Error: {str(e)}", "code": ""}]
+            
     def analyze_file(self, filepath: str) -> ReviewResult:
         """Analyze a single file"""
-        issues = []
-        suggestions = []
-        
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                content = f.read()
-                lines = content.split('\n')
-                
-                # Determine language
-                lang = self._detect_language(filepath)
-                
-                if lang in self.RULES:
-                    for rule in self.RULES[lang]:
-                        import re
-                        for i, line in enumerate(lines, 1):
-                            if re.search(rule['pattern'], line):
-                                issues.append({
-                                    'line': i,
-                                    'severity': rule['severity'],
-                                    'message': rule['message'],
-                                    'code': line.strip()[:80]
-                                })
-                
-                # Check file size
-                if len(lines) > 1000:
-                    suggestions.append(f"File has {len(lines)} lines - consider splitting")
-                
-                # Check for missing docstrings
-                if lang == 'python' and len(lines) > 50:
-                    if '"""' not in content and "'''" not in content:
-                        suggestions.append("Consider adding a docstring")
-                
+                file_content = f.read()
+            lang = self._detect_language(filepath) or "unknown"
+            
+            prompt = f"""
+You are an expert code reviewer. Review the following {lang} file for security vulnerabilities, bugs, and quality issues.
+Return the result as a JSON object with the following structure:
+{{
+    "issues": [
+        {{"line": 10, "severity": "high", "message": "SQL injection risk", "code": "query = ..."}}
+    ],
+    "score": 85,
+    "suggestions": [
+        "Use parameterized queries instead of string formatting"
+    ]
+}}
+Score should be 0-100 (100 is perfect).
+
+File content:
+```
+{file_content}
+```
+"""
+            response = litellm.completion(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            
+            result_json = response.choices[0].message.content
+            parsed = json.loads(result_json)
+            
+            return ReviewResult(
+                file=filepath,
+                issues=parsed.get("issues", []),
+                score=parsed.get("score", 100),
+                suggestions=parsed.get("suggestions", [])
+            )
+            
         except Exception as e:
-            issues.append({
-                'line': 0,
-                'severity': 'error',
-                'message': f"Could not read file: {str(e)}",
-                'code': ''
-            })
-        
-        # Calculate score
-        score = 100
-        for issue in issues:
-            if issue['severity'] == 'high':
-                score -= 20
-            elif issue['severity'] == 'medium':
-                score -= 10
-            elif issue['severity'] == 'low':
-                score -= 3
-        
-        score = max(0, score)
-        
-        return ReviewResult(
-            file=filepath,
-            issues=issues,
-            score=score,
-            suggestions=suggestions
-        )
-    
+            return ReviewResult(
+                file=filepath,
+                issues=[{"line": 0, "severity": "error", "message": f"Error: {str(e)}", "code": ""}],
+                score=0,
+                suggestions=[]
+            )
+            
     def _detect_language(self, filepath: str) -> Optional[str]:
         """Detect programming language from file extension"""
         ext = Path(filepath).suffix.lower()
-        
         for lang, extensions in LANGUAGE_EXTENSIONS.items():
             if ext in extensions:
                 return lang
         return None
-
 
 class GitHubIntegration:
     """GitHub integration for code reviews"""
