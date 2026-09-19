@@ -1,9 +1,9 @@
 - [x] Read issue and discover that `CodeAnalyzer` was replaced by `CodeReviewer` in the latest commit.
-- [ ] Add `import re` at the top of `reviewer.py`
-- [ ] Restore `CodeAnalyzer` into `reviewer.py` with performance fixes
+- [x] Add `import re` at the top of `reviewer.py`
+- [x] Restore `CodeAnalyzer` into `reviewer.py` with performance fixes
   - Pre-compile the regex patterns in `RULES` during `CodeAnalyzer.__init__` using `re.compile()`
   - Refrain from reading entire huge files into memory; iterate line-by-line
   - Use the compiled regex objects in the analysis loop
-- [ ] Ensure all tests pass
-- [ ] Commit incrementally
-- [ ] Make final commit and delete plan
+- [x] Ensure all tests pass
+- [x] Commit incrementally
+- [x] Make final commit and delete plan
