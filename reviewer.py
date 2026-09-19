@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import litellm
+import re
 
 
 LANGUAGE_EXTENSIONS = {
@@ -44,6 +45,130 @@ class ReviewResult:
     issues: List[Dict]
     score: int
     suggestions: List[str]
+
+
+class CodeAnalyzer:
+    """Static code analysis without AI"""
+    
+    RULES = {
+        'python': [
+            {'pattern': r'eval\s*\(', 'severity': 'high', 'message': 'Avoid eval() - security risk'},
+            {'pattern': r'os\.system\s*\(', 'severity': 'high', 'message': 'Avoid os.system() - shell injection risk'},
+            {'pattern': r'pickle\.loads?', 'severity': 'medium', 'message': 'Pickle can be unsafe with untrusted data'},
+            {'pattern': r'password\s*=\s*["\'][^"\']+["\']', 'severity': 'medium', 'message': 'Hardcoded password detected'},
+            {'pattern': r'TODO|FIXME|XXX|HACK', 'severity': 'low', 'message': 'Incomplete code marker found'},
+            {'pattern': r'except:\s*$', 'severity': 'medium', 'message': 'Bare except clause - catches all exceptions'},
+            {'pattern': r'print\s*\(', 'severity': 'low', 'message': 'Debug print statement found'},
+        ],
+        'javascript': [
+            {'pattern': r'eval\s*\(', 'severity': 'high', 'message': 'Avoid eval() - security risk'},
+            {'pattern': r'console\.log', 'severity': 'low', 'message': 'Debug console.log found'},
+            {'pattern': r'document\.write', 'severity': 'high', 'message': 'document.write is dangerous'},
+            {'pattern': r'innerHTML\s*=', 'severity': 'medium', 'message': 'Potential XSS via innerHTML'},
+            {'pattern': r'password|pwd|secret', 'severity': 'high', 'message': 'Potential credential in code'},
+            {'pattern': r'var\s+\w+', 'severity': 'low', 'message': 'Use let/const instead of var'},
+        ],
+        'typescript': [
+            {'pattern': r'@ts-ignore', 'severity': 'low', 'message': 'Type checking disabled'},
+            {'pattern': r'any\s*\)', 'severity': 'low', 'message': 'Avoid using any type'},
+            {'pattern': r'console\.log', 'severity': 'low', 'message': 'Debug console.log found'},
+        ],
+        'go': [
+            {'pattern': r'fmt\.Println', 'severity': 'low', 'message': 'Debug print found'},
+            {'pattern': r'panic\s*\(', 'severity': 'medium', 'message': 'Panic usage detected'},
+            {'pattern': r'//TODO', 'severity': 'low', 'message': 'TODO comment found'},
+        ],
+        'rust': [
+            {'pattern': r'unsafe\s*{', 'severity': 'medium', 'message': 'Unsafe code block'},
+            {'pattern': r'\.unwrap\(\)', 'severity': 'low', 'message': 'Using unwrap() - may panic'},
+            {'pattern': r'eprintln!', 'severity': 'low', 'message': 'Error print to stderr'},
+        ],
+    }
+    
+    def __init__(self):
+        self.issues = []
+        self._compiled_rules = {}
+        for lang, rules in self.RULES.items():
+            self._compiled_rules[lang] = []
+            for rule in rules:
+                self._compiled_rules[lang].append({
+                    'pattern': re.compile(rule['pattern']),
+                    'severity': rule['severity'],
+                    'message': rule['message']
+                })
+    
+    def analyze_file(self, filepath: str) -> ReviewResult:
+        """Analyze a single file"""
+        issues = []
+        suggestions = []
+        
+        try:
+            lang = self._detect_language(filepath)
+            
+            lines_count = 0
+            has_docstring = False
+            
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for i, line in enumerate(f, 1):
+                    lines_count += 1
+                    
+                    if lang == 'python':
+                        if '"""' in line or "'''" in line:
+                            has_docstring = True
+                            
+                    if lang in self._compiled_rules:
+                        for rule in self._compiled_rules[lang]:
+                            if rule['pattern'].search(line):
+                                issues.append({
+                                    'line': i,
+                                    'severity': rule['severity'],
+                                    'message': rule['message'],
+                                    'code': line.strip()[:80]
+                                })
+            
+            # Check file size
+            if lines_count > 1000:
+                suggestions.append(f"File has {lines_count} lines - consider splitting")
+            
+            # Check for missing docstrings
+            if lang == 'python' and lines_count > 50 and not has_docstring:
+                suggestions.append("Consider adding a docstring")
+                
+        except Exception as e:
+            issues.append({
+                'line': 0,
+                'severity': 'error',
+                'message': f"Could not read file: {str(e)}",
+                'code': ''
+            })
+        
+        # Calculate score
+        score = 100
+        for issue in issues:
+            if issue['severity'] == 'high':
+                score -= 20
+            elif issue['severity'] == 'medium':
+                score -= 10
+            elif issue['severity'] == 'low':
+                score -= 3
+        
+        score = max(0, score)
+        
+        return ReviewResult(
+            file=filepath,
+            issues=issues,
+            score=score,
+            suggestions=suggestions
+        )
+    
+    def _detect_language(self, filepath: str) -> Optional[str]:
+        """Detect programming language from file extension"""
+        ext = Path(filepath).suffix.lower()
+        
+        for lang, extensions in LANGUAGE_EXTENSIONS.items():
+            if ext in extensions:
+                return lang
+        return None
 
 
 class CodeReviewer:
